@@ -7,6 +7,7 @@ import { InsightInfoPopover, type InsightInfo } from "@/components/management/In
 import { ManagementMapPreview, type ManagementMapMarker } from "@/components/management/ManagementMapPreview";
 import { BackendRecoveryPanel } from "@/components/layout/BackendRecoveryPanel";
 import { PlanningSnapshotSaveController } from "@/components/dashboard/IntelligencePanel";
+import { SharedAskCfsSource } from "@/components/dashboard/SharedAskCfsDrawer";
 import { CFS_SAVE_PLANNING_SNAPSHOT_EVENT } from "@/components/dashboard/OverviewCommandCenter";
 import { developmentModelLabSummary } from "@/data/intelligence/developmentModelLab";
 import { useDashboardState } from "@/hooks/useDashboardState";
@@ -44,7 +45,7 @@ import type { CfsAiSearchRequest } from "@/types/api";
 const number = new Intl.NumberFormat("en-US");
 const money = new Intl.NumberFormat("en-US", { notation: "compact", style: "currency", currency: "USD", maximumFractionDigits: 1 });
 
-export function ManagementWorkspace({ backend, onAskContextChange, section }: { backend: BackendAvailabilityController; onAskContextChange?: (context: CfsAiSearchRequest["filter_context"]) => void; section: ManagementSection }) {
+export function ManagementWorkspace({ backend, section }: { backend: BackendAvailabilityController; section: ManagementSection }) {
   if (backend.status !== "healthy") {
     return (
       <main className="relative z-10 min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8" data-management-section={section} data-testid="cfs-management-workspace">
@@ -59,10 +60,10 @@ export function ManagementWorkspace({ backend, onAskContextChange, section }: { 
       </main>
     );
   }
-  return <ManagementDataWorkspace onAskContextChange={onAskContextChange} section={section} />;
+  return <ManagementDataWorkspace section={section} />;
 }
 
-function ManagementDataWorkspace({ onAskContextChange, section }: { onAskContextChange?: (context: CfsAiSearchRequest["filter_context"]) => void; section: ManagementSection }) {
+function ManagementDataWorkspace({ section }: { section: ManagementSection }) {
   const dashboard = useDashboardState();
   const period = dashboard.managementAnalysisPeriod;
   const coverageSummary = useDevelopmentActivitySummary();
@@ -126,30 +127,34 @@ function ManagementDataWorkspace({ onAskContextChange, section }: { onAskContext
   const elevatedSignals = model.rankingSummary.class_distribution
     .filter((row) => ["very_high_development_signal", "high_development_signal"].includes(row.development_signal_class))
     .reduce((sum, row) => sum + row.row_count, 0);
-  const managementAskContext = useMemo<CfsAiSearchRequest["filter_context"]>(() => periodValid ? ({
-    page_active_development_parcels: development.activeParcelCount || null,
+  const managementAskContext = useMemo<CfsAiSearchRequest["filter_context"]>(() => ({
+    page_active_development_parcels: periodValid ? development.activeParcelCount || null : null,
     ...(USE_DEMO_DATA ? { page_active_hotspots: hotspots.markers.length || null } : {}),
     page_economic_review_parcels: economics.data?.summary.high_opportunity_count ?? null,
     page_elevated_signals: sourceAvailable(model.source) ? elevatedSignals : null,
     page_flood_review_parcels: sourceAvailable(flood.source) ? metric(flood.metrics, "review-required-parcels") : null,
     page_high_signals: sourceAvailable(model.source) ? model.rankingSummary.class_distribution.find((row) => row.development_signal_class === "high_development_signal")?.row_count ?? null : null,
-    page_latest_permit_count: trendRows.at(-1)?.value ?? null,
-    page_latest_permit_period: trendRows.at(-1)?.label ?? null,
+    page_latest_permit_count: periodValid ? trendRows.at(-1)?.value ?? null : null,
+    page_latest_permit_period: periodValid ? trendRows.at(-1)?.label ?? null : null,
     page_median_value_per_acre: economics.data?.summary.median_value_per_acre ?? null,
     page_parcels_evaluated: sourceAvailable(model.source) ? model.rankingSummary.unique_parcel_count : null,
-    page_permit_records: development.totalPermits || null,
-    management_analysis_period: period.label,
-    permit_date_end: period.endDate,
-    permit_date_start: period.startDate,
+    page_permit_records: periodValid ? development.totalPermits || null : null,
+    management_analysis_period: periodValid ? period.label : null,
+    permit_date_end: periodValid ? period.endDate : null,
+    permit_date_start: periodValid ? period.startDate : null,
     page_school_assignment_review: sourceAvailable(schools.source) ? metric(schools.metrics, "assignment-review") : null,
-    page_top_hotspot_label: hotspotRows.at(0)?.label ?? null,
-    page_top_hotspot_permits: hotspotRows.at(0)?.value ?? null,
+    page_top_hotspot_label: periodValid ? hotspotRows.at(0)?.label ?? null : null,
+    page_top_hotspot_permits: periodValid ? hotspotRows.at(0)?.value ?? null : null,
     page_total_assessed_value: economics.data?.summary.total_assessed_value ?? null,
     page_total_economic_parcels: economics.data?.summary.total_parcels_analyzed ?? null,
     page_very_high_signals: sourceAvailable(model.source) ? model.rankingSummary.class_distribution.find((row) => row.development_signal_class === "very_high_development_signal")?.row_count ?? null : null,
-  }) : ({}), [development.activeParcelCount, development.source, development.totalPermits, economics.data, elevatedSignals, flood.metrics, flood.source, hotspotRows, hotspots.markers.length, model.rankingSummary, model.source, period.endDate, period.label, period.startDate, periodValid, schools.metrics, schools.source, trendRows]);
+  }), [development.activeParcelCount, development.source, development.totalPermits, economics.data, elevatedSignals, flood.metrics, flood.source, hotspotRows, hotspots.markers.length, model.rankingSummary, model.source, period.endDate, period.label, period.startDate, periodValid, schools.metrics, schools.source, trendRows]);
 
-  useEffect(() => onAskContextChange?.(managementAskContext), [managementAskContext, onAskContextChange]);
+  const managementAskPanelContext = useMemo<CfsAiSearchRequest["filter_context"]>(() => ({
+    experience: "management",
+    management_section: section,
+    ...managementAskContext,
+  }), [managementAskContext, section]);
 
   const openPlanningBuilder = (
     id: Exclude<ManagementKpiHandoffId, "economicReview">,
@@ -202,6 +207,7 @@ function ManagementDataWorkspace({ onAskContextChange, section }: { onAskContext
 
   return (
     <main className="relative z-10 min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8" data-management-section={section} data-testid="cfs-management-workspace">
+      <SharedAskCfsSource appMode="planning" filterContext={managementAskPanelContext} />
       <PlanningSnapshotSaveController />
       <div className="mx-auto flex w-full max-w-[92rem] flex-col gap-5">
         <header className="cfs-command-surface rounded-2xl px-5 py-6 sm:px-7">

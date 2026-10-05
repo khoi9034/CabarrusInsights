@@ -95,8 +95,13 @@ SAFE_FILTER_CONTEXT_KEYS = frozenset(
         "selected_feature_signal_band",
         "selected_feature_top_drivers",
         "selected_parcel_id",
+        "selected_parcel_assessed_value",
+        "selected_parcel_governance_review",
+        "selected_parcel_jurisdiction",
         "selected_parcel_pin14",
         "selected_parcel_quality",
+        "selected_parcel_size_category",
+        "selected_parcel_valuation_band",
         "selected_parcel_zoning",
         "selected_signal_id",
         "selected_signal_title",
@@ -133,7 +138,7 @@ def safe_filter_context(value: Any) -> dict[str, str | int | float | bool]:
         return {}
     clean: dict[str, str | int | float | bool] = {}
     for key, item in value.items():
-        if key not in SAFE_FILTER_CONTEXT_KEYS or len(clean) >= 24:
+        if key not in SAFE_FILTER_CONTEXT_KEYS:
             continue
         if isinstance(item, bool):
             clean[key] = item
@@ -349,6 +354,20 @@ UNSAFE_REPLACEMENTS = {
 }
 
 
+def _is_direct_grounded_query(request: CfsAiSearchRequest) -> bool:
+    if request.interaction_mode == "preset":
+        return True
+    query = " ".join(request.query.lower().split())
+    return query.startswith((
+        "give me the numbers",
+        "how many",
+        "is that a ",
+        "is this a ",
+        "what does ",
+        "what is this parcel",
+    ))
+
+
 class CfsAiSearchService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -385,6 +404,9 @@ class CfsAiSearchService:
             and _is_fast_economics_guidance_query(request.query)
         ):
             _log_ai_timing("deterministic_fast_guidance", fallback.timings_ms)
+            return fallback
+        if _is_direct_grounded_query(request):
+            _log_ai_timing("deterministic_direct", fallback.timings_ms)
             return fallback
         provider = self._settings.cfs_ai_provider
 
@@ -503,7 +525,6 @@ class CfsAiSearchService:
                 ),
             )[:6]
         return sanitize_response(response)
-
     def _provider_answer_with_timeout(
         self,
         request: CfsAiSearchRequest,
@@ -893,12 +914,24 @@ def _selected_parcel_answer(
         return None
     zoning = filters.get("selected_parcel_zoning")
     quality = filters.get("selected_parcel_quality")
-    if any(term in query for term in ("planning analysis", "analyze this site", "analyse this site", "important about this parcel", "important about this site", "deep analysis")):
+    if any(term in query for term in ("planning analysis", "analyze this site", "analyse this site", "important about this parcel", "important about this site", "makes this parcel interesting", "interesting about this parcel", "deep analysis")):
         known = []
+        jurisdiction = filters.get("selected_parcel_jurisdiction")
+        if jurisdiction:
+            known.append(f"it is in {jurisdiction}")
         if zoning:
             known.append(f"the current zoning context is {zoning}")
+        size = filters.get("selected_parcel_size_category")
+        if size:
+            known.append(f"the recorded parcel-size category is {size}")
+        valuation = filters.get("selected_parcel_assessed_value")
+        valuation_band = filters.get("selected_parcel_valuation_band")
+        if valuation:
+            known.append(f"the current assessed-value context is ${float(valuation):,.0f}{f' ({valuation_band})' if valuation_band else ''}")
         if quality:
             known.append(f"the recorded source quality is {quality}")
+        if filters.get("selected_parcel_governance_review"):
+            known.append("the record carries a governance-review flag")
         band = filters.get("selected_feature_signal_band")
         if band:
             known.append(f"the Development Signal band is {band}")
@@ -3095,17 +3128,20 @@ def _management_handoff_answer(
     domains: list[CfsAiDomain],
 ) -> CfsAiSearchResponse | None:
     filters = safe_filter_context(request.filter_context)
-    title = filters.get("management_handoff_title")
+    title = filters.get("management_handoff_title") or filters.get("management_handoff_result_label")
     if not title or "what am i looking" not in " ".join(request.query.lower().split()):
         return None
     primary = filters.get("management_handoff_primary_result")
     count = filters.get("management_handoff_record_count") if primary == "records" else filters.get("management_handoff_feature_count")
+    if count is None:
+        count = filters.get("filtered_signal_count")
     label = filters.get("management_handoff_result_label") or "selected results"
     period = filters.get("management_analysis_period")
     meaning = filters.get("management_handoff_meaning") or "These are the Management-selected results now highlighted on the map."
     why = filters.get("management_handoff_why_it_matters")
     inspect_next = filters.get("management_handoff_inspect_next")
-    answer = f"You are viewing {_fmt(count)} {label} for {title}{f' during {period}' if period else ''}. {meaning}"
+    subject = label if str(label).lower() == str(title).lower() else f"{label} for {title}"
+    answer = f"You are viewing {_fmt(count)} {subject}{f' during {period}' if period else ''}. {meaning}"
     if why:
         answer += f" {why}"
     response = _response(
@@ -3190,6 +3226,13 @@ def _management_answer(
             "It checks whether higher-ranked historical patterns were more associated with later observed new-construction permits; the result supports screening, not parcel-level probability claims."
         )
         evidence = [_evidence("Development Signals model evidence", "Training: 2014–2019; validation: 2020–2021; held-out test: 2022.", "Development Signals model evidence", "limited")]
+    elif section == "development-signals" and any(term in query for term in ("evidence supports", "support that", "supports the ranking", "ranking evidence")):
+        answer = (
+            "The ranking is supported by historical Cabarrus County parcel conditions and observed new-construction permit outcomes. "
+            "The model used 2014–2019 for training, 2020–2021 for validation, and 2022 as a held-out test; higher-ranked groups contained more later observed activity in aggregate. "
+            "That supports relative screening direction, not a probability or causal claim for an individual parcel. Current entitlements, utility capacity, school capacity, and the full development pipeline remain outside the evidence and should be verified before site-level conclusions."
+        )
+        evidence = [_evidence("Development Signals model evidence", "Historical parcel and permit evidence; training 2014–2019, validation 2020–2021, held-out test 2022.", "Development Signals model evidence", "limited")]
     elif section == "planning-insights" and any(term in query for term in ("biggest", "top hotspot", "most activity", "most concentrated")):
         label = value("page_top_hotspot_label")
         permits = value("page_top_hotspot_permits")
@@ -3200,11 +3243,51 @@ def _management_answer(
         )
         answer += " This is observed activity concentration, not a forecast."
         evidence = [_evidence("Cabarrus County permit activity", answer, "Cabarrus County permit activity")]
-    elif section == "economic-insights" and any(term in query for term in ("high opportunity", "opportunity mean", "opportunity class")):
-        count = value("page_economic_review_parcels")
+    elif section == "planning-insights" and "which area" in query:
+        label = value("page_top_hotspot_label")
+        permits = value("page_top_hotspot_permits")
+        if label and permits is not None:
+            answer = f"Inspect {label} first because it is the highest-activity area currently shown, with {_fmt(permits)} observed permit records. Verify the underlying permits and their constraint overlap before treating concentration as a growth forecast."
+            status = "available"
+        else:
+            answer = "The current approved evidence does not identify a ranked area, so naming one would be speculation. Inspect the selected-period permit results first and restore map-safe locations before prioritizing a geography."
+            status = "not_available"
+        evidence = [_evidence("Cabarrus County permit activity", answer, "Cabarrus County permit activity", status)]
+    elif section == "economic-insights" and any(term in query for term in ("opportunity classes", "classifications", "class mix")):
+        economics = context.get("economics_intelligence") or {}
+        breakdown = economics.get("opportunity_class_breakdown", []) if isinstance(economics, dict) else []
+        definitions = {
+            "Special Asset / Compare With Caution": "a non-standard civic, institutional, or infrastructure asset that should be compared only with similar properties",
+            "Low Fiscal Upside / High Public Burden": "lower value-per-acre context with constraints and no observed growth context; verify service burden before treating it as an opportunity",
+            "Underbuilt Redevelopment Candidate": "an improvement-to-value ratio below 0.65 on at least 0.5 acre with at least $100,000 in land value; review zoning, constraints, and permits before scenario work",
+        }
+        rows = [
+            f"{row.get('opportunity_class')}: {_fmt(row.get('count'))} — {definitions.get(str(row.get('opportunity_class')), 'a screening class that requires parcel-level source review')}"
+            for row in breakdown[:5]
+            if isinstance(row, dict)
+        ]
         answer = (
-            f"High opportunity means a parcel meets the current Cabarrus Insights screening pattern for stronger economic review; {_fmt(count)} parcels are flagged on this page. "
-            "It combines available value, acreage, improvement, growth-pressure, infrastructure-burden, and constraint context. It is not an appraisal, approval recommendation, or investment forecast."
+            "The current economic class mix is:\n"
+            + _bullets(rows or ["Current class counts are not available."])
+            + "\nThese are planning-screening labels, not appraisals, approval recommendations, or forecasts of investment performance."
+        )
+        evidence = [_evidence("Economic opportunity class mix", "; ".join(rows) or "Class counts unavailable.", "Cabarrus County parcel economic context", "available" if rows else "not_available")]
+    elif section == "economic-insights" and (
+        any(term in query for term in ("high opportunity", "opportunity mean", "opportunity class"))
+        or ("flagged" in query and any(term in query for term in ("share", "percent", "prove", "mean")))
+    ):
+        count = value("page_economic_review_parcels")
+        total = value("page_total_economic_parcels")
+        share = count / total * 100 if isinstance(count, (int, float)) and isinstance(total, (int, float)) and total else None
+        flagged_phrase = (
+            f"{_fmt(count)} of {_fmt(total)} analyzed parcels are flagged"
+            if isinstance(total, (int, float))
+            else f"{_fmt(count)} parcels are flagged on this page"
+        )
+        answer = (
+            f"High opportunity means a parcel meets the current Cabarrus Insights screening pattern for stronger economic review; {flagged_phrase}"
+            + (f", or {share:.1f}%. " if share is not None else ". ")
+            + "It combines available value, acreage, improvement, growth-pressure, infrastructure-burden, and constraint context. It is not an appraisal, approval recommendation, or investment forecast."
         )
         evidence = [_evidence("Parcel economic screening", f"{_fmt(count)} parcels are currently flagged for economic review.", "Cabarrus County parcel economic context", "limited")]
     elif "permit" in query and any(term in query for term in ("how many", "count", "number")):
@@ -3212,6 +3295,111 @@ def _management_answer(
         period = value("management_analysis_period") or "the current Management period"
         answer = f"The current Management view contains {_fmt(count)} permit records for {period}."
         evidence = [_evidence("Cabarrus County permit activity", answer, "Cabarrus County permit activity")]
+    elif any(term in query for term in ("what information is missing", "stronger conclusion", "what would you verify", "verify next")):
+        missing = [
+            label
+            for label, key in (
+                ("selected-period permit activity", "page_permit_records"),
+                ("school assignment context", "page_school_assignment_review"),
+                ("economic screening", "page_economic_review_parcels"),
+                ("parcel-level overlap between the visible indicators", "page_top_hotspot_label"),
+            )
+            if value(key) is None
+        ]
+        answer = (
+            "The main gap is not another countywide total; it is evidence that connects the visible screening populations at parcel and area level. "
+            f"The current page is missing {_plain_list(missing)}. "
+            "Before drawing a stronger conclusion, verify the underlying parcel records, measure overlap rather than adding the totals, and obtain official school enrollment/capacity or utility capacity where those issues affect the decision."
+        )
+        evidence = [_evidence("Current Management evidence gaps", answer, "Current Management page", "limited")]
+    elif any(term in query for term in (
+        "analyze", "analysis", "what actually matters", "what stands out",
+        "suggest together", "planning interpretation", "constraints matter",
+        "prioritize", "which area should", "professional planning",
+    )):
+        counts = []
+        if section == "planning-insights":
+            permits = value("page_permit_records")
+            active = value("page_active_development_parcels")
+            flood_count = value("page_flood_review_parcels")
+            school_count = value("page_school_assignment_review")
+            if isinstance(permits, (int, float)) and isinstance(active, (int, float)) and active:
+                intensity = permits / active
+                answer = (
+                    f"The selected period contains {_fmt(permits)} permits across {_fmt(active)} active development parcels—about {intensity:.1f} permits per active parcel. "
+                    "That points to distributed parcel activity unless the hotspot ranking shows a clear geographic concentration. "
+                    f"Flood review ({_fmt(flood_count)} parcels) and school assignment coverage ({_fmt(school_count)} parcels) are countywide reference populations, not permit overlaps or evidence of school capacity pressure.\n\n"
+                    "Inspect the highest-ranked activity area first, then measure its actual permit overlap with flood context and obtain official enrollment/capacity evidence before drawing a service-impact conclusion."
+                )
+                evidence = [_evidence("Current Planning Insights comparison", f"Permits: {_fmt(permits)}; active parcels: {_fmt(active)}; permits per active parcel: {intensity:.1f}", "Current Management page", "available")]
+            else:
+                answer = "The current Planning Insights page does not have enough selected-period permit evidence for a concentration analysis. The flood and school values remain countywide reference coverage and should not be treated as permit overlap."
+                evidence = [_evidence("Current Planning Insights page", "Selected-period permit evidence is unavailable.", "Current Management page", "not_available")]
+        elif section == "economic-insights":
+            total = value("page_total_economic_parcels")
+            flagged = value("page_economic_review_parcels")
+            if isinstance(total, (int, float)) and isinstance(flagged, (int, float)) and total:
+                share = flagged / total * 100
+                answer = (
+                    f"Economic review is selective rather than countywide: {_fmt(flagged)} of {_fmt(total)} analyzed parcels are flagged, or {share:.1f}%. "
+                    "That screening share identifies a manageable diligence pool; it does not prove redevelopment feasibility, fiscal benefit, market demand, or infrastructure capacity.\n\n"
+                    "Start with the highest-opportunity rows that also have credible data confidence, then verify appraisal inputs, constraints, access, and service capacity before treating the class as a recommendation."
+                )
+                evidence = [_evidence("Current Economic Insights comparison", f"Flagged: {_fmt(flagged)} of {_fmt(total)} parcels ({share:.1f}%).", "Current Management page", "available")]
+            else:
+                answer = "The current Economic Insights page does not have enough approved parcel totals to compare the screened population."
+                evidence = [_evidence("Current Economic Insights page", "Economic parcel totals are unavailable.", "Current Management page", "not_available")]
+        elif section == "development-signals":
+            total = value("page_parcels_evaluated")
+            elevated = value("page_elevated_signals")
+            very_high = value("page_very_high_signals")
+            if isinstance(total, (int, float)) and isinstance(elevated, (int, float)) and total:
+                share = elevated / total * 100
+                answer = (
+                    f"The elevated bands are deliberately narrow: {_fmt(elevated)} of {_fmt(total)} evaluated parcels, or {share:.1f}%, are High or Very High"
+                    + (f"; {_fmt(very_high)} are Very High" if very_high is not None else "")
+                    + ". This is a relative historical screening rank, not a parcel development probability or proof of causation.\n\n"
+                    "Use the band to prioritize record review, then verify current permits, zoning, constraints, access, utilities, and observed site conditions before making a planning judgment."
+                )
+                evidence = [_evidence("Current Development Signals comparison", f"Elevated: {_fmt(elevated)} of {_fmt(total)} parcels ({share:.1f}%).", "Current Management page", "limited")]
+            else:
+                answer = "The current Development Signals page does not have enough approved ranking totals for a comparative interpretation."
+                evidence = [_evidence("Current Development Signals page", "Signal ranking totals are unavailable.", "Current Management page", "not_available")]
+        else:
+            counts = [
+                (label, int(current))
+                for label, key in (
+                    ("flood-review parcels", "page_flood_review_parcels"),
+                    ("elevated Development Signals", "page_elevated_signals"),
+                    ("economic-review parcels", "page_economic_review_parcels"),
+                )
+                if isinstance((current := value(key)), (int, float))
+            ]
+        counts.sort(key=lambda item: item[1], reverse=True)
+        if section == "overview" and not counts:
+            answer = "The current page has not finished loading approved evidence, so a planning interpretation would be speculation. Wait for the visible KPIs to resolve, then compare the largest review populations and their parcel-level overlap."
+            evidence = [_evidence("Current Management page", "No approved KPI values are available yet.", "Current Management page", "not_available")]
+        elif section == "overview":
+            leading = counts[0]
+            comparison = ""
+            if len(counts) > 1:
+                second = counts[1]
+                difference = leading[1] - second[1]
+                comparison = f", {difference:,} more than {second[0]} ({second[1]:,})"
+            period = value("management_analysis_period")
+            hotspot = value("page_top_hotspot_label")
+            hotspot_count = value("page_top_hotspot_permits")
+            hotspot_text = (
+                f" Within {period or 'the selected period'}, {hotspot} is the leading recorded activity area at {_fmt(hotspot_count)} permits."
+                if hotspot and hotspot_count is not None
+                else ""
+            )
+            answer = (
+                f"The largest visible review workload is {leading[0]} at {leading[1]:,}{comparison}.{hotspot_text} "
+                "That ranking identifies where review volume is concentrated; it does not show that one indicator caused another, and these populations may overlap, so their totals should not be added.\n\n"
+                "The useful next step is to inspect the leading area or parcel subset and measure overlap among permits, flood context, school context, and Development Signals. Verify source records and official capacity evidence before turning the screening pattern into a policy or site conclusion."
+            )
+            evidence = [_evidence("Current Management comparison", "; ".join(f"{label}: {count:,}" for label, count in counts), "Current Management page", "available")]
     elif any(term in query for term in ("give me the numbers", "give actual numbers", "explain these numbers", "numbers on this page", "key numbers", "main numbers", "what does this page show")):
         keys = (
             [

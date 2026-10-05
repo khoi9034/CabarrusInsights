@@ -551,6 +551,28 @@ def test_ai_search_freeform_economics_guidance_uses_provider(monkeypatch) -> Non
     assert response.answer_mode == "provider_enhanced"
 
 
+def test_ai_search_simple_count_stays_on_grounded_deterministic_path(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    def provider_call(*_args, **_kwargs):
+        calls["count"] += 1
+        return {"answer": "Provider should not be needed."}
+
+    monkeypatch.setattr(ai_search_service, "_post_provider_json", provider_call)
+    response = CfsAiSearchService(
+        _settings(
+            cfs_ai_enabled=True,
+            cfs_ai_model="gpt-4o-mini",
+            cfs_ai_provider="openai",
+            openai_api_key="test-key",
+        ),
+    ).search(CfsAiSearchRequest(query="How many permit records are there?"), _context())
+
+    assert calls["count"] == 0
+    assert response.provider == "none"
+    assert "18 permit records" in response.answer
+
+
 def test_ai_search_accepts_concise_provider_explanation(monkeypatch) -> None:
     concise = (
         "SFHA means Special Flood Hazard Area. In CFS it is screening context; "
@@ -568,7 +590,7 @@ def test_ai_search_accepts_concise_provider_explanation(monkeypatch) -> None:
             cfs_ai_provider="openai",
             openai_api_key="test-key",
         ),
-    ).search(CfsAiSearchRequest(query="What does SFHA mean?"), _context())
+    ).search(CfsAiSearchRequest(query="Analyze the SFHA context on this page."), _context())
 
     assert response.provider == "openai"
     assert response.answer == concise
@@ -982,12 +1004,12 @@ def test_ai_search_management_economics_explains_current_screening_definition() 
     request.filter_context["page_economic_review_parcels"] = 14328
     response = CfsAiSearchService(_settings()).search(request, _context())
 
-    assert "14,328 parcels are flagged on this page" in response.answer
+    assert "14,328 parcels are flagged" in response.answer
     assert "screening pattern" in response.answer
     assert "not an appraisal" in response.answer
 
 
-def test_ai_search_management_provider_gets_page_and_relevant_evidence(monkeypatch) -> None:
+def test_ai_search_management_numbers_stay_deterministic(monkeypatch) -> None:
     captured: dict = {}
 
     def provider_call(_url, payload, *_args, **_kwargs):
@@ -1005,13 +1027,9 @@ def test_ai_search_management_provider_gets_page_and_relevant_evidence(monkeypat
         ),
     ).search(request, _context())
 
-    provider_request = json.loads(captured["messages"][1]["content"])
-    assert response.provider == "openai"
-    assert provider_request["interaction_mode"] == "freeform"
-    assert provider_request["filter_context"]["management_section"] == "overview"
-    assert provider_request["filter_context"]["page_permit_records"] == 64426
-    assert "economics_intelligence" in provider_request["cfs_context"]
-    assert "development_activity_detail" in provider_request["cfs_context"]["indicator_intelligence"]
+    assert captured == {}
+    assert response.provider == "none"
+    assert "64,426" in response.answer
 
 
 def test_ai_search_master_data_mode_uses_approved_workspace_context() -> None:

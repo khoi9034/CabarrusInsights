@@ -143,8 +143,6 @@ function ProductShell() {
     useState<ManagementHandoffContext | null>(null);
   const [managementSection, setManagementSectionState] =
     useState<ManagementSection>("overview");
-  const [managementAskContext, setManagementAskContext] =
-    useState<CfsAiSearchRequest["filter_context"]>({});
   const askCfsModeRef = useRef(cfsAppMode);
   const previousAskAgentResultRef = useRef<typeof askAgentResult>(null);
   const [masterDataAskContext, setMasterDataAskContext] =
@@ -274,7 +272,6 @@ function ProductShell() {
   }, []);
 
   const setManagementSection = useCallback((section: ManagementSection) => {
-    setManagementAskContext({});
     setManagementSectionState(section);
     const params = new URLSearchParams(window.location.search);
     params.set("app", "management");
@@ -282,10 +279,6 @@ function ProductShell() {
     params.delete("focus");
     window.history.pushState(null, "", `/?${params.toString()}`);
   }, []);
-
-  useEffect(() => {
-    if (backendAvailability.status !== "healthy") setManagementAskContext({});
-  }, [backendAvailability.status]);
 
   if (!cfsAppMode) {
     return <CfsMasterHome />;
@@ -296,7 +289,6 @@ function ProductShell() {
       ? {
           experience: "management",
           management_section: managementSection,
-          ...managementAskContext,
           selected_feature_id:
             selectedDevelopmentHotspotContext?.clusterId ??
             selectedDevelopmentHotspotContext?.officialParcelId ??
@@ -374,6 +366,23 @@ function ProductShell() {
             selected_feature_top_drivers:
               selectedModelResearchContext?.topDrivers.join(", ") ?? null,
             selected_parcel_id: selectedParcelId ?? null,
+            selected_parcel_assessed_value:
+              selectedParcelIntelligence?.assessedValue ?? null,
+            selected_parcel_governance_review:
+              selectedParcelIntelligence?.needsGovernanceReview ?? null,
+            selected_parcel_jurisdiction:
+              selectedParcelIntelligence?.planningJurisdiction ?? null,
+            selected_parcel_size_category:
+              selectedParcelIntelligence?.parcelSizeCategory ?? null,
+            selected_parcel_valuation_band:
+              selectedParcelIntelligence?.valuationBand ?? null,
+            selected_parcel_quality:
+              selectedParcelIntelligence?.parcelQualityStatus ?? null,
+            selected_parcel_zoning:
+              [
+                selectedParcelIntelligence?.zoningJurisdiction,
+                selectedParcelIntelligence?.zoningCode,
+              ].filter(Boolean).join(" / ") || null,
             management_source_page:
               managementHandoff?.sourceManagementPage ?? null,
             management_source_insight:
@@ -471,7 +480,6 @@ function ProductShell() {
         >
           <ManagementWorkspace
             backend={backendAvailability}
-            onAskContextChange={setManagementAskContext}
             section={managementSection}
           />
         </EnterpriseErrorBoundary>
