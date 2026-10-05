@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.dependencies.database import get_read_only_db
+from app.presentation_cache import get_or_build
 from app.repositories.school_constraints_repository import (
     SchoolConstraintFilters,
     SchoolConstraintsRepository,
@@ -78,8 +79,7 @@ def get_school_statistics(
 ) -> SchoolConstraintStatisticsResponse:
     """Return school assignment and capacity-readiness statistics."""
 
-    return _service(db).get_statistics(
-        _school_filters(
+    filters = _school_filters(
             school_assignment_confidence=school_assignment_confidence,
             school_assignment_review_required=school_assignment_review_required,
             school_summary_status=school_summary_status,
@@ -91,8 +91,15 @@ def get_school_statistics(
             has_middle_assignment=has_middle_assignment,
             has_high_assignment=has_high_assignment,
             capacity_data_available=capacity_data_available,
-        )
     )
+    builder = lambda: _service(db).get_statistics(filters)
+    cacheable = all(value is None for value in (
+        school_assignment_confidence, school_assignment_review_required,
+        school_summary_status, recommended_action, elementary_school_name,
+        middle_school_name, high_school_name, has_elementary_assignment,
+        has_middle_assignment, has_high_assignment, capacity_data_available,
+    ))
+    return get_or_build("schools:statistics", builder) if cacheable else builder()
 
 
 @router.get("/filter", response_model=SchoolConstraintFilterResponse)
@@ -159,7 +166,7 @@ def get_school_qa_summary(
 ) -> SchoolQaSummaryResponse:
     """Return school assignment QA readiness metrics."""
 
-    return _service(db).get_qa_summary()
+    return get_or_build("schools:qa-summary", _service(db).get_qa_summary)
 
 
 @router.get("/lea-pupil-context", response_model=SchoolLeaPupilContextResponse)
@@ -210,12 +217,13 @@ def get_school_utilization_seed(
     """Return presentation-derived school utilization seed rows."""
 
     try:
-        return _service(db).get_utilization_seed_rows(
-            school_level=school_level,
-            utilization_class=utilization_class,
-            limit=limit,
-            offset=offset,
+        builder = lambda: _service(db).get_utilization_seed_rows(
+            school_level=school_level, utilization_class=utilization_class,
+            limit=limit, offset=offset,
         )
+        return get_or_build(
+            f"schools:utilization-seed:{limit}:{offset}", builder,
+        ) if school_level is None and utilization_class is None else builder()
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

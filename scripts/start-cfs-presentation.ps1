@@ -14,6 +14,7 @@ $Logs = Join-Path $Root "logs"
 $FrontendEnv = Join-Path $Root ".env.local"
 $StopScript = Join-Path $PSScriptRoot "stop-cfs-local.ps1"
 $DataCheck = Join-Path $PSScriptRoot "check_cfs_local_data.py"
+$CachePrewarm = Join-Path $PSScriptRoot "prewarm_cfs_local.py"
 $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
 $Python = if ($env:CFS_PYTHON) {
   $env:CFS_PYTHON
@@ -283,6 +284,8 @@ Set-Location -LiteralPath '$Backend'
 `$env:CFS_AUTH_MODE='local_dev'
 `$env:CFS_ARTIFACT_PROVIDER='local_file'
 `$env:CFS_JOB_PROVIDER='inline'
+`$env:CFS_PRESENTATION_CACHE_ENABLED='true'
+`$env:CFS_PRESENTATION_FREEZE_ID='thursday-demo-2026-09-16'
 `$env:CFS_DATABASE_POOL_SIZE='10'
 `$env:CFS_DATABASE_MAX_OVERFLOW='10'
 `$env:CFS_DATABASE_POOL_TIMEOUT_SECONDS='30'
@@ -366,7 +369,7 @@ try {
       $backendProcess = Start-Backend
       $startedBackend = $true
     }
-    if (!$BackendOnly) {
+    if (!$BackendOnly -and $FrontendOnly) {
       $frontendStartedAt = Get-Date
       $frontendProcess = Start-Frontend
       $startedFrontend = $true
@@ -380,6 +383,20 @@ try {
     0
   }
   Write-Cfs "Backend ready: HTTP $($backendReady.StatusCode)."
+
+  $cacheStartedAt = Get-Date
+  Invoke-Checked -FailureMessage "Local presentation cache prewarm failed." -Command {
+    & $Python $CachePrewarm
+  }
+  $cacheReadyMs = [math]::Round(((Get-Date) - $cacheStartedAt).TotalMilliseconds, 1)
+  $cacheReady = Invoke-RestMethod -Uri "$ApiBaseUrl/health/presentation-cache" -TimeoutSec 15
+  Write-Cfs "Presentation cache ready: $($cacheReady.entry_count) entries."
+
+  if (!$BackendOnly -and !$FrontendOnly) {
+    $frontendStartedAt = Get-Date
+    $frontendProcess = Start-Frontend
+    $startedFrontend = $true
+  }
 
   if (!$BackendOnly) {
     $frontendReady = Wait-Http -Url $FrontendUrl -TimeoutSeconds 180
@@ -403,6 +420,8 @@ try {
     database = "cfs_dev"
     data_readiness_ms = $dataReadyMs
     backend_startup_ms = $backendReadyMs
+    presentation_cache_ms = $cacheReadyMs
+    presentation_cache_entries = $cacheReady.entry_count
     frontend_startup_ms = $frontendReadyMs
     total_startup_ms = $totalMs
     ask_cfs = if ($aiStatus.ai_enabled -and $aiStatus.configured_provider -eq "openai" -and $aiStatus.api_key_configured -and $aiStatus.model_configured) { "optional provider active" } else { "deterministic local" }

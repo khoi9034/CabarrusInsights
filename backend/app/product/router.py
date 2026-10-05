@@ -27,6 +27,12 @@ from app.product.artifacts import (
 )
 from app.product.audit import append_event, list_events
 from app.product.ingestion import RowsAdapter, run_ingestion, stage
+from app.services.live_refresh import (
+    LiveRefreshUnavailable,
+    invalidate_live_data_caches,
+    refresh_status,
+    refresh_permits,
+)
 from app.product.jobs import ExternalWorkerJobProvider, InlineJobProvider
 from app.product.master_data import (
     MasterDataExportRequest,
@@ -44,6 +50,7 @@ from app.product.principal import (
     authorize,
     current_principal,
 )
+from app.presentation_cache import get_or_build
 from app.product.schemas import (
     ArtifactUploadRequest,
     AskMessageRequest,
@@ -145,7 +152,11 @@ def get_master_data_datasets(
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     authorize(principal, Permission.MASTER_DATA_VIEW)
-    return _envelope(request, list_master_data_datasets(source_session), settings)
+    datasets = get_or_build(
+        "master-data:catalog",
+        lambda: list_master_data_datasets(source_session),
+    )
+    return _envelope(request, datasets, settings)
 
 
 @router.get("/master-data/datasets/{dataset_id}")
@@ -680,6 +691,34 @@ def get_admin_summary(
         administration_summary(session, principal, settings),
         settings,
     )
+
+
+@router.post("/admin/data-refresh/permits")
+def post_admin_permit_refresh(
+    request: Request,
+    principal: ProductPrincipal = Depends(get_product_principal),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Run the one approved permit worker; browser input cannot alter its scope."""
+
+    authorize(principal, Permission.ADMINISTER)
+    try:
+        result = refresh_permits(settings)
+    except LiveRefreshUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    invalidate_live_data_caches()
+    return _envelope(request, result, settings)
+
+
+@router.get("/admin/data-refresh/status")
+def get_admin_data_refresh_status(
+    request: Request,
+    session: Session = Depends(get_db, scope="function"),
+    principal: ProductPrincipal = Depends(get_product_principal),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    authorize(principal, Permission.ADMINISTER)
+    return _envelope(request, refresh_status(session), settings)
 
 
 @router.get("/admin/users")

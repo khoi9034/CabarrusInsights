@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.dependencies.database import get_read_only_db
+from app.presentation_cache import get_or_build
 from app.repositories.constraints_repository import (
     ConstraintsRepository,
     FloodConstraintFilters,
@@ -221,8 +222,7 @@ def get_flood_summary(
 
     service = _service(db)
     try:
-        return service.get_flood_summary(
-            _flood_filters(
+        filters = _flood_filters(
                 floodplain_present=floodplain_present,
                 floodway_present=floodway_present,
                 sfha_present=sfha_present,
@@ -234,7 +234,14 @@ def get_flood_summary(
                 percent_constrained_min=percent_constrained_min,
                 percent_constrained_max=percent_constrained_max,
             )
-        )
+        builder = lambda: service.get_flood_summary(filters)
+        cacheable = all(value is None for value in (
+            floodplain_present, floodway_present, sfha_present,
+            moderate_flood_present, flood_review_required, buildability_impact,
+            flood_severity_class, dominant_flood_zone,
+            percent_constrained_min, percent_constrained_max,
+        ))
+        return get_or_build("flood:summary", builder) if cacheable else builder()
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)

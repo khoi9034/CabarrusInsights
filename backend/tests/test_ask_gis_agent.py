@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.schemas.ai_search import CfsAiSearchRequest
+from app.routers.ai_search_router import search_cfs
 from app.services.ask_gis_agent import TOOL_REGISTRY, V2_TOOL_REGISTRY, _validated_provider_plan, available_datasets, run_gis_agent, tool_registry
 
 
@@ -52,6 +53,14 @@ def test_default_agent_returns_compact_opaque_result_and_updates_map() -> None:
     assert "filter_sewer_proximity" in result.tool_plan
     assert "exclude_result_set" in result.tool_plan
     assert not hasattr(result, "parcel_ids")
+
+
+def test_controlled_gis_api_response_retains_grounding_evidence() -> None:
+    response = search_cfs(_request("Show flood-review parcels."), db=_Db())
+
+    assert response.provider_status == "controlled_gis_tools"
+    assert response.evidence
+    assert response.evidence[0].source
 
 
 def test_follow_up_chains_previous_result_and_agent_mode_updates_map() -> None:

@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.dependencies.database import get_read_only_db
+from app.presentation_cache import get_or_build
 from app.repositories import ParcelRepository
 from app.repositories.parcel_repository import (
     ParcelFilterFilters,
@@ -110,16 +111,19 @@ def get_parcel_statistics(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> ParcelStatisticsResponse:
     service = ParcelService(ParcelRepository(db))
-    return service.get_statistics(
-        filters=ParcelStatisticsFilters(
+    filters = ParcelStatisticsFilters(
             parcel_quality_status=parcel_quality_status,
             safe_for_dashboard=safe_for_dashboard,
             valuation_band=valuation_band,
             zoning_category=zoning_category,
             zoning_confidence=zoning_confidence,
             zoning_jurisdiction=zoning_jurisdiction,
-        ),
     )
+    builder = lambda: service.get_statistics(filters=filters)
+    return get_or_build("parcels:statistics", builder) if all(value is None for value in (
+        zoning_jurisdiction, zoning_category, parcel_quality_status,
+        zoning_confidence, valuation_band, safe_for_dashboard,
+    )) else builder()
 
 
 @router.get("/zoning-summary", response_model=ParcelZoningSummaryResponse)
@@ -133,16 +137,19 @@ def get_parcel_zoning_summary(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> ParcelZoningSummaryResponse:
     service = ParcelService(ParcelRepository(db))
-    return service.get_zoning_summary(
-        filters=ParcelZoningSummaryFilters(
+    filters = ParcelZoningSummaryFilters(
             parcel_quality_status=parcel_quality_status,
             safe_for_dashboard=safe_for_dashboard,
             zoning_category=zoning_category,
             zoning_code=zoning_code,
             zoning_confidence=zoning_confidence,
             zoning_jurisdiction=zoning_jurisdiction,
-        ),
     )
+    builder = lambda: service.get_zoning_summary(filters=filters)
+    return get_or_build("parcels:zoning-summary", builder) if all(value is None for value in (
+        zoning_jurisdiction, zoning_category, zoning_code,
+        parcel_quality_status, zoning_confidence, safe_for_dashboard,
+    )) else builder()
 
 
 @router.get("/governance-warnings", response_model=ParcelGovernanceWarningResponse)

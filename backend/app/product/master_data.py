@@ -17,7 +17,7 @@ from pydantic import (
     StrictStr,
     field_validator,
 )
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -287,6 +287,21 @@ _PERMIT_PARCEL = (
     .group_by(RealPropertyPermitParcelRelationship.permit_id)
     .subquery("master_data_permit_parcel")
 )
+_PERMIT_MATCH_COUNTS = (
+    select(
+        RealPropertyPermitParcelRelationship.permit_id.label("permit_id"),
+        func.count(RealPropertyPermitParcelRelationship.official_parcel_id).label(
+            "match_count",
+        ),
+    )
+    .group_by(RealPropertyPermitParcelRelationship.permit_id)
+    .subquery("master_data_permit_match_counts")
+)
+_PERMIT_MATCH_STATUS = case(
+    (func.coalesce(_PERMIT_MATCH_COUNTS.c.match_count, 0) == 0, "Unmatched"),
+    (_PERMIT_MATCH_COUNTS.c.match_count > 1, "Multiple Matches"),
+    else_="Matched",
+)
 _PERMIT_FROM = (
     RealPropertyPermitClean.__table__
     .outerjoin(
@@ -307,6 +322,10 @@ _PERMIT_JOIN_FROM = (
     .outerjoin(
         PermitIntelligenceSegment.__table__,
         PermitIntelligenceSegment.permit_id == RealPropertyPermitClean.permit_id,
+    )
+    .outerjoin(
+        _PERMIT_MATCH_COUNTS,
+        _PERMIT_MATCH_COUNTS.c.permit_id == RealPropertyPermitClean.permit_id,
     )
     .outerjoin(
         RealPropertyPermitParcelRelationship.__table__,
@@ -342,6 +361,16 @@ _PERMIT_TO_PARCELS = MasterDataRelationshipSpec(
     crs="EPSG:4326",
     from_clause=_PERMIT_JOIN_FROM,
     fields=(
+        _field(
+            "match_status",
+            "Match Status",
+            "Derived from the governed permit-to-parcel relationship count.",
+            "category",
+            _PERMIT_MATCH_STATUS,
+            default=True,
+            filter_operators=("eq",),
+            relationship_id="permits_to_parcels",
+        ),
         _field(
             "parcel_pin14",
             "Parcel PIN14",

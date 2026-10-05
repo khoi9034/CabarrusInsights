@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.dependencies.database import get_read_only_db
+from app.presentation_cache import get_or_build
 from app.repositories import DevelopmentRepository
 from app.repositories.development_repository import (
     DevelopmentActivitySummaryFilters,
@@ -55,8 +56,7 @@ def get_development_statistics(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> DevelopmentStatisticsResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_statistics(
-        filters=DevelopmentStatisticsFilters(
+    filters = DevelopmentStatisticsFilters(
             activity_class=activity_class,
             month=month,
             permit_type=permit_type,
@@ -64,8 +64,12 @@ def get_development_statistics(
             year=year,
             zoning_category=zoning_category,
             zoning_jurisdiction=zoning_jurisdiction,
-        ),
     )
+    builder = lambda: service.get_statistics(filters=filters)
+    return get_or_build("development:statistics", builder) if all(value is None for value in (
+        year, month, permit_type, work_type, zoning_jurisdiction,
+        zoning_category, activity_class,
+    )) else builder()
 
 
 @router.get(
@@ -76,7 +80,10 @@ def get_new_construction_statistics(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> NewConstructionStatisticsResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_new_construction_statistics()
+    return get_or_build(
+        "development:new-construction-statistics",
+        service.get_new_construction_statistics,
+    )
 
 
 @router.get("/new-construction/trends", response_model=NewConstructionTrendsResponse)
@@ -84,7 +91,10 @@ def get_new_construction_trends(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> NewConstructionTrendsResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_new_construction_trends()
+    return get_or_build(
+        "development:new-construction-trends",
+        service.get_new_construction_trends,
+    )
 
 
 @router.get(
@@ -121,7 +131,7 @@ def get_prediction_features_summary(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> DevelopmentPredictionFeaturesSummaryResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_prediction_features_summary()
+    return get_or_build("development:prediction-features", service.get_prediction_features_summary)
 
 
 @router.get(
@@ -132,7 +142,7 @@ def get_prediction_ranking_summary(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> DevelopmentPredictionRankingSummaryResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_prediction_ranking_summary()
+    return get_or_build("development:prediction-ranking", service.get_prediction_ranking_summary)
 
 
 @router.get(
@@ -146,11 +156,12 @@ def get_development_model_research_preview(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> DevelopmentModelResearchPreviewResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_model_research_preview(
-        include_geometry=include_geometry,
-        limit=limit,
-        signal=signal,
+    builder = lambda: service.get_model_research_preview(
+        include_geometry=include_geometry, limit=limit, signal=signal,
     )
+    return get_or_build(
+        "development:signals-preview", builder,
+    ) if limit == 120 and signal == "higher" and not include_geometry else builder()
 
 
 @router.get(
@@ -161,7 +172,10 @@ def get_transportation_accessibility_summary(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> DevelopmentPredictionTransportationAccessibilitySummaryResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_transportation_accessibility_summary()
+    return get_or_build(
+        "development:transportation-accessibility",
+        service.get_transportation_accessibility_summary,
+    )
 
 
 @router.get(
@@ -172,7 +186,10 @@ def get_transportation_plan_traffic_summary(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> DevelopmentPredictionTransportationPlanTrafficSummaryResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_transportation_plan_traffic_summary()
+    return get_or_build(
+        "development:transportation-plan-traffic",
+        service.get_transportation_plan_traffic_summary,
+    )
 
 
 @router.get("/trends", response_model=DevelopmentTrendsResponse)
@@ -239,8 +256,7 @@ def get_development_hotspots(
 ) -> DevelopmentHotspotsResponse:
     service = DevelopmentService(DevelopmentRepository(db))
     try:
-        return service.get_hotspots(
-            filters=DevelopmentHotspotsFilters(
+        filters = DevelopmentHotspotsFilters(
                 activity_class=activity_class,
                 date_end=date_end,
                 date_start=date_start,
@@ -260,11 +276,24 @@ def get_development_hotspots(
                 year=year,
                 zoning_category=zoning_category,
                 zoning_jurisdiction=zoning_jurisdiction,
-            ),
-            limit=limit,
-            offset=offset,
-            sort_by=sort_by,
+            )
+        builder = lambda: service.get_hotspots(
+            filters=filters, limit=limit, offset=offset, sort_by=sort_by,
         )
+        cacheable = (
+            date_start is not None and date_end is not None
+            and limit == 10 and offset == 0 and sort_by == "total_permit_count"
+            and all(value is None for value in (
+                activity_class, development_domain, growth_signal, month,
+                official_parcel_id, zoning_jurisdiction, zoning_category,
+                permit_segment, permit_status_stage, permit_type,
+                permit_value_class, work_type, start_year, end_year, year,
+                recent_window, rolling_window,
+            ))
+        )
+        return get_or_build(
+            f"management:hotspots:{date_start}:{date_end}", builder,
+        ) if cacheable else builder()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -284,8 +313,7 @@ def get_development_zoning_summary(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> DevelopmentZoningSummaryResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_zoning_summary(
-        filters=DevelopmentZoningSummaryFilters(
+    filters = DevelopmentZoningSummaryFilters(
             month=month,
             permit_status=permit_status,
             permit_type=permit_type,
@@ -294,10 +322,14 @@ def get_development_zoning_summary(
             zoning_category=zoning_category,
             zoning_code=zoning_code,
             zoning_jurisdiction=zoning_jurisdiction,
-        ),
-        limit=limit,
-        offset=offset,
     )
+    builder = lambda: service.get_zoning_summary(filters=filters, limit=limit, offset=offset)
+    return get_or_build("development:zoning-summary", builder) if (
+        limit == 50 and offset == 0 and all(value is None for value in (
+            zoning_jurisdiction, zoning_category, zoning_code, permit_type,
+            work_type, permit_status, year, month,
+        ))
+    ) else builder()
 
 
 @router.get("/activity-summary", response_model=DevelopmentActivitySummaryResponse)
@@ -316,8 +348,7 @@ def get_development_activity_summary(
 ) -> DevelopmentActivitySummaryResponse:
     service = DevelopmentService(DevelopmentRepository(db))
     try:
-        return service.get_activity_summary(
-            filters=DevelopmentActivitySummaryFilters(
+        filters = DevelopmentActivitySummaryFilters(
                 activity_class=activity_class,
                 date_end=date_end,
                 date_start=date_start,
@@ -328,8 +359,20 @@ def get_development_activity_summary(
                 year=year,
                 zoning_category=zoning_category,
                 zoning_jurisdiction=zoning_jurisdiction,
-            ),
+            )
+        builder = lambda: service.get_activity_summary(filters=filters)
+        cacheable = all(value is None for value in (
+            year, month, permit_type, work_type, permit_status,
+            zoning_jurisdiction, zoning_category, activity_class,
+        )) and ((date_start is None and date_end is None) or (
+            date_start is not None and date_end is not None
+        ))
+        if not cacheable:
+            return builder()
+        key = "development:coverage" if date_start is None else (
+            f"management:activity:{date_start}:{date_end}"
         )
+        return get_or_build(key, builder)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -394,7 +437,9 @@ def get_development_permit_segment_statistics(
     db: Session = Depends(get_read_only_db, scope="function"),
 ) -> PermitSegmentStatisticsResponse:
     service = DevelopmentService(DevelopmentRepository(db))
-    return service.get_permit_segment_statistics()
+    return get_or_build(
+        "development:permit-segments", service.get_permit_segment_statistics,
+    )
 
 
 @router.get(

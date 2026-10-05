@@ -1258,7 +1258,7 @@ async function assertDoubleClickAndKeyboard(page, map) {
 
 async function assertParcelHit(page, map) {
   const expand = page.getByRole("button", {
-    name: "Expand map layers panel",
+    name: /Expand map (?:layers panel|controls)/i,
     exact: true,
   });
   if ((await expand.count()) && (await expand.isVisible())) await expand.click();
@@ -1345,7 +1345,7 @@ async function assertMapFocusMode(page) {
 }
 
 async function assertOverlay(page, { group, layerId, title }) {
-  const expand = page.getByRole("button", { name: "Expand map layers panel", exact: true });
+  const expand = page.getByRole("button", { name: /Expand map (?:layers panel|controls)/i });
   if ((await expand.count()) && (await expand.isVisible())) await expand.click();
   const card = page.locator("article").filter({ has: page.getByText(title, { exact: true }) }).first();
   if (!(await card.isVisible())) {

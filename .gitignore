@@ -39,6 +39,15 @@ logs/*.log
 logs/*.json
 logs/backend-dev.log
 logs/next-dev.log
+logs/*.png
+
+# local analysis/editor artifacts
+/.VSCodeCounter/
+
+# database backups belong outside the repository
+/backups/
+*.backup
+*.dump
 
 # env files (can opt-in for committing if needed)
 .env*

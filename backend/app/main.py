@@ -19,6 +19,8 @@ from app.product.artifacts import ArtifactPathError
 from app.product.principal import AuthorizationError
 from app.product.router import router as product_v1_router
 from app.product.service import ProductConflict, ProductNotFound, ProductValidationError
+from app.presentation_cache import clear as clear_presentation_cache
+from app.presentation_cache import status as presentation_cache_status
 from app.routers import (
     ai_search_router,
     constraints_router,
@@ -295,6 +297,26 @@ def health_database() -> dict[str, str]:
         ) from exc
 
     return {"database": "connected"}
+
+
+@app.get("/health/presentation-cache", tags=["Health"])
+def health_presentation_cache() -> dict[str, object]:
+    result = presentation_cache_status()
+    if result["enabled"] and not result["ready"]:
+        raise HTTPException(status_code=503, detail=result)
+    return result
+
+
+@app.post("/health/presentation-cache/reset", tags=["Health"])
+def reset_presentation_cache(request: Request) -> dict[str, object]:
+    if (
+        settings.cfs_runtime_mode != "local"
+        or request.client is None
+        or request.client.host not in {"127.0.0.1", "::1"}
+    ):
+        raise HTTPException(status_code=404, detail="Not found.")
+    clear_presentation_cache()
+    return presentation_cache_status()
 
 
 def _safe_error_summary(exc: BaseException) -> str:

@@ -57,6 +57,11 @@ INTELLIGENCE_CACHE_TTL = timedelta(minutes=5)
 _INTELLIGENCE_CACHE: dict[str, Any] = {"expires_at": None, "payload": None}
 
 
+def clear_indicator_intelligence_cache() -> None:
+    _INTELLIGENCE_CACHE["expires_at"] = None
+    _INTELLIGENCE_CACHE["payload"] = None
+
+
 def get_cached_indicator_intelligence() -> dict[str, Any] | None:
     cached_payload = _INTELLIGENCE_CACHE.get("payload")
     expires_at = _INTELLIGENCE_CACHE.get("expires_at")

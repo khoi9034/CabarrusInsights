@@ -48,46 +48,38 @@ Before startup, the launcher reports any process listening on ports `3000` or
 `8000`, including the owning PID, process name, and command line when Windows
 exposes it. The launcher does not fall back to another port.
 
-## Emergency Stale Cleanup
+## Safe recovery
 
-Use this only when stale processes or generated Next.js cache are blocking the
-local demo. It kills all local Node and Python processes on the machine, so do
-not use it while unrelated Node/Python work is running.
+Use the repository-owned stop script. It validates CFS process identities and
+does not stop PostgreSQL or unrelated Node/Python work.
 
 ```powershell
 cd C:\CabarrusFutureScape
-taskkill /F /IM node.exe
-taskkill /F /IM python.exe
-if (Test-Path ".next") { Remove-Item ".next" -Recurse -Force }
-npm run dev:cfs
+npm.cmd run stop:cfs
+npm.cmd run present:cfs
 ```
 
-## Port-Specific Cleanup
-
-If other Node/Python work is active, prefer stopping only CFS ports:
+For one service only, call the same supported script directly:
 
 ```powershell
-foreach ($port in 3000,8000) {
-  $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
-  foreach ($listener in $listeners) {
-    $proc = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
-    if ($proc) {
-      Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    }
-  }
-}
-
-npm run dev:cfs
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop-cfs-local.ps1 -FrontendOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop-cfs-local.ps1 -BackendOnly
 ```
 
-Only clear `.next` when stale generated Next.js cache is suspected or the user
-explicitly asks for runtime cleanup.
+Never use image-wide `taskkill` or kill an arbitrary port owner. If the launcher
+reports a non-CFS process on port 3000 or 8000, stop that application through
+its own supported command. Generated `.next` output is local state; remove it
+only while CFS is stopped and only when a reproducible cache problem requires
+it.
 
 ## Health Checks
 
 ```powershell
+cd C:\CabarrusFutureScape
+npm.cmd run check:internal-readiness
 Invoke-RestMethod http://127.0.0.1:8000/
 Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8000/health/ready
 Invoke-RestMethod http://127.0.0.1:8000/health/database
 Invoke-RestMethod "http://127.0.0.1:8000/parcels/search?q=CFS-PARCEL-0149726579"
 Invoke-RestMethod "http://127.0.0.1:8000/development/hotspots?limit=1"

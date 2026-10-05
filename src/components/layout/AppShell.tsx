@@ -471,7 +471,6 @@ function ProductShell() {
         >
           <ManagementWorkspace
             backend={backendAvailability}
-            key={`management-${managementSection}-${backendAvailability.refreshKey}`}
             onAskContextChange={setManagementAskContext}
             section={managementSection}
           />

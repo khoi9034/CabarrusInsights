@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.dependencies.database import get_optional_read_only_db, get_read_only_db
 from app.routers.economics_router import get_cached_economics_intelligence
 from app.routers.indicators_router import get_cached_indicator_intelligence
-from app.schemas.ai_search import CfsAiContext, CfsAiSearchRequest, CfsAiSearchResponse
+from app.schemas.ai_search import CfsAiContext, CfsAiEvidenceItem, CfsAiSearchRequest, CfsAiSearchResponse
 from app.services.ai_search_service import (
     CfsAiSearchService,
     get_ai_provider_status,
@@ -220,6 +220,12 @@ def search_cfs(
                 data_mode=request.mode,
                 provider="none",
                 provider_status="local_data_unavailable",
+                evidence=[CfsAiEvidenceItem(
+                    title="Active highlighted result",
+                    detail=str(spatial_analysis["unavailable"]),
+                    source="Current Analyst map result",
+                    confidence="not_available",
+                )],
                 response_time_ms=elapsed,
                 timings_ms={"spatial_analysis_ms": elapsed, "total_ms": elapsed},
             )
@@ -237,6 +243,12 @@ def search_cfs(
             data_source="local_live_backend",
             data_mode=request.mode,
             domains=["permits"],
+            evidence=[CfsAiEvidenceItem(
+                title="Active highlighted result",
+                detail=str(spatial_analysis["answer"]),
+                source="Current Analyst map result",
+                confidence="limited",
+            )],
             provider="none",
             provider_status="controlled_spatial_analysis",
             provenance={"analysis_boundary": "active_highlighted_result", "geometry_in_ai_context": False},
@@ -268,6 +280,22 @@ def search_cfs(
             data_source="local_live_backend",
             data_mode=request.mode,
             domains=["general"],
+            evidence=[CfsAiEvidenceItem(
+                title="Ask Insights GIS result",
+                detail=(
+                    f"{agent_result.count:,} parcels; "
+                    + ("; ".join(agent_result.criteria) or "approved GIS criteria")
+                ),
+                source=(
+                    ", ".join(agent_result.source_datasets)
+                    or "Approved Cabarrus Insights datasets"
+                ),
+                confidence=(
+                    "available"
+                    if agent_result.verification_status == "verified"
+                    else "limited"
+                ),
+            )],
             fallback_used=False,
             provider="none",
             provider_status="controlled_gis_tools",
@@ -596,3 +624,8 @@ def _json_rows(value: Any) -> list[dict[str, Any]]:
         for row in rows
         if isinstance(row, dict)
     ]
+
+
+def clear_ask_cfs_context_cache() -> None:
+    _ASK_CFS_CONTEXT_CACHE.clear()
+    _ASK_CFS_CONTEXT_CACHE.update({"expires_at": None, "payload": None})

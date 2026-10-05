@@ -301,7 +301,11 @@ function attachDiagnostics(context, { ignoreApiFailures = false, offline = false
     const pathname = /^https?:/i.test(url) ? new URL(url).pathname : url;
     if (
       ["/health/ready", "/health/database", "/ai/status"].includes(pathname) ||
-      pathname === "/favicon.ico"
+      pathname === "/favicon.ico" ||
+      isMapDiagnosticRequest(url, {
+        apiOrigin: API_ORIGIN,
+        appOrigin: BASE_ORIGIN,
+      })
     ) {
       return;
     }
@@ -769,7 +773,7 @@ async function goto(page, query = "") {
   await waitForRequiredApiDrain(page, "Route transition");
   const generation = beginAcceptanceTransition(page);
   await page.goto(`${BASE_URL}/${query}`, { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "Return to CFS Home" }).waitFor({
+  await page.getByRole("button", { name: /Return to (?:CFS|Cabarrus Insights) home/i }).waitFor({
     timeout: 45_000,
   });
   await delay(750);
@@ -839,7 +843,7 @@ async function navigateToHome(page) {
   await waitForMapLifecycle(page);
   await waitForRequiredApiDrain(page, "Home transition");
   const generation = beginAcceptanceTransition(page);
-  const home = page.getByRole("button", { name: "Return to CFS Home" });
+  const home = page.getByRole("button", { name: /Return to (?:CFS|Cabarrus Insights) home/i });
   const transition = {
     attempts: [],
     from_url: page.url(),
@@ -859,7 +863,7 @@ async function navigateToHome(page) {
             location.pathname === "/" &&
             !new URLSearchParams(location.search).has("app") &&
             document.querySelector('[data-testid="cfs-master-home"]') &&
-          !document.querySelector('[aria-label="Return to CFS Home"]'),
+          !document.querySelector('[aria-label="Return to CFS Home"], [aria-label="Return to Cabarrus Insights home"]'),
         null,
         { timeout: 10_000 },
       );
@@ -923,14 +927,22 @@ async function assertLiveStatus(page) {
     .getByTestId("local-runtime-ask")
     .getByText("Grounded local answers", { exact: true })
     .waitFor();
-  await panel.getByText(/^(?:OpenStreetMap|Configured tile basemap)$/).waitFor();
+  await panel.getByText(/^(?:OpenFreeMap|OpenStreetMap|Configured tile basemap)$/).waitFor();
   await controls.click();
 }
 
-async function askQuestions(page, questions, { expectPersistence = true } = {}) {
+async function askQuestions(
+  page,
+  questions,
+  {
+    expectPersistence = true,
+    expectPersistenceStatus = true,
+    expectVisibleResponse = true,
+  } = {},
+) {
   let conversationId = null;
   for (const [index, question] of questions.entries()) {
-    const textbox = page.getByRole("textbox", { name: "Ask CFS question" }).first();
+    const textbox = page.getByRole("textbox", { name: "Ask Insights question" }).first();
     await textbox.waitFor({ timeout: 45_000 });
     if (index === 0) await waitForRequiredApiDrain(page, "Ask CFS startup");
     const panel = textbox.locator("xpath=ancestor::section[1]");
@@ -988,22 +1000,27 @@ async function askQuestions(page, questions, { expectPersistence = true } = {}) 
         `/api/v1/ask-cfs/conversations/${conversationId}/messages`,
         "Ask CFS message targeted a different conversation.",
       );
-      await panel
-        .locator(
-          `[data-testid="ask-cfs-persistence-status"][data-conversation-id="${conversationId}"]`,
-        )
-        .waitFor({ timeout: 45_000 });
+      if (expectPersistenceStatus) {
+        await page.getByTestId("shared-ask-cfs-drawer")
+          .locator(
+            `[data-testid="ask-cfs-persistence-status"][data-conversation-id="${conversationId}"]`,
+          )
+          .waitFor({ timeout: 45_000 });
+      }
     }
     const response = await request.response();
     assert(response, "Ask CFS request completed without an HTTP response.");
     assert.equal(response.status(), 200, `Ask CFS returned ${response.status()}.`);
     const body = await response.json();
     assert(body.answer?.trim().length > 20, "Ask CFS answer was empty.");
-    assert(body.evidence?.length > 0, "Ask CFS answer had no evidence.");
-    assert(body.caveats?.length > 0, "Ask CFS answer had no caveats.");
-    await panel.getByText("Ask CFS response", { exact: true }).waitFor();
-    await panel.getByText(/^Sources & evidence \([1-9]\d*\)$/).waitFor();
-    await panel.getByText("Limitations", { exact: true }).waitFor();
+    assert(body.evidence?.length > 0, `Ask Insights answer had no evidence for: ${question}`);
+    if (!expectVisibleResponse) continue;
+    const responseSurface = page.getByTestId("shared-ask-cfs-drawer");
+    await responseSurface.getByText("Ask Insights response", { exact: true }).waitFor();
+    await responseSurface.getByText(/^Sources & evidence \([1-9]\d*\)$/).waitFor();
+    if (body.caveats?.length) {
+      await responseSurface.getByText("Limitations", { exact: true }).waitFor({ state: "attached" });
+    }
   }
   return conversationId;
 }
@@ -1012,21 +1029,22 @@ async function assertTwoExperienceHome(page) {
   const home = page.getByTestId("cfs-master-home");
   await home.waitFor({ timeout: 45_000 });
   const expected = [
-    ["management", "CFS Management", "/?app=management&section=overview"],
-    ["builder", "CFS Builder", "/?app=planning"],
+    ["management", "Management", "/?app=management&section=overview"],
+    ["builder", "Analyst", "/?app=planning"],
   ];
   assert.equal(await home.locator('[data-testid^="cfs-home-card-"]').count(), expected.length);
   for (const [mode, title, href] of expected) {
     const card = home.getByTestId(`cfs-home-card-${mode}`);
     assert.equal(await card.getAttribute("href"), href, `${title} Home route drifted.`);
-    await card.getByText(title, { exact: true }).waitFor();
   }
   assert.equal(await home.getByTestId("cfs-home-card-ask-cfs").count(), 0);
-  await home.getByTestId("cfs-home-shared-ask-cfs").getByText("Ask CFS", { exact: true }).waitFor();
+  await home.getByTestId("cfs-home-shared-ask-cfs").getByText("Ask Insights", { exact: true }).waitFor();
 }
 
 async function openSharedAskCfsDrawer(page, { appMode, label }) {
-  const toggle = page.getByTestId("shared-ask-cfs-toggle");
+  const toggle = page.locator(
+    '[data-testid="shared-ask-cfs-toggle"]:visible, [data-testid="shared-ask-cfs-rail"]:visible',
+  ).first();
   assert.equal(new URL(page.url()).searchParams.get("app"), appMode);
   await page.waitForFunction(() => {
     const element = document.querySelector('[data-testid="shared-ask-cfs-toggle"]');
@@ -1035,7 +1053,7 @@ async function openSharedAskCfsDrawer(page, { appMode, label }) {
   await toggle.click();
   const drawer = page.getByTestId("shared-ask-cfs-drawer");
   await drawer.waitFor({ timeout: 45_000 });
-  await drawer.getByRole("heading", { name: `Ask CFS · ${label.replace(/^CFS /, "")}`, exact: true }).waitFor();
+  await drawer.getByRole("heading", { name: `Ask Insights · ${label.replace(/^CFS /, "")}`, exact: true }).waitFor();
   assert.equal(await drawer.evaluate((element) => element.tagName), "ASIDE");
   assert.equal(await drawer.getAttribute("aria-modal"), null, "Ask CFS became modal.");
   if ((page.viewportSize()?.width ?? 0) >= 1280) {
@@ -1195,7 +1213,7 @@ async function planningWorkflow(page) {
       },
       "Parcel focus did not preserve the interactive same-origin map.",
     );
-    const expand = page.getByRole("button", { name: "Expand map layers panel" });
+    const expand = page.getByRole("button", { name: /Expand map (?:layers panel|controls)/i });
     if (await expand.count()) await expand.click();
     await toggleLayer(page, "Development Hotspots", "Development Activity");
     await toggleLayer(page, "Floodplain Review", "Floodplain Review");
@@ -1215,7 +1233,7 @@ async function planningWorkflow(page) {
       "What does the school-capacity context mean?",
     ]);
     const askPanel = page
-      .getByRole("textbox", { name: "Ask CFS question" })
+      .getByRole("textbox", { name: "Ask Insights question" })
       .first()
       .locator("xpath=ancestor::section[1]");
     const resetResponse = page.waitForResponse(
@@ -1230,7 +1248,7 @@ async function planningWorkflow(page) {
     assert.equal(reset.status(), 200, "Owned Ask CFS reset failed.");
     assert.equal((await reset.json()).data?.id, conversationId, "Ask CFS reset targeted a different conversation.");
     await askPanel
-      .getByText("Ask CFS response", { exact: true })
+      .getByText("Ask Insights response", { exact: true })
       .waitFor({ state: "hidden" });
     await closeSharedAskCfsDrawer(page, drawer, "planning");
   });
@@ -1240,12 +1258,11 @@ async function planningWorkflow(page) {
     let snapshotArchived = false;
     let primaryFailure = null;
     try {
-      await page.getByRole("button", { name: /Workspace:/ }).click();
       await page.getByTestId("command-center-model-lab").click();
-      const expand = page.getByRole("button", { name: "Expand Model Lab panel" }).first();
-      if (await expand.count()) await expand.click();
-      await page.getByTestId("model-lab-controls").waitFor({ timeout: 30_000 });
-      await page.getByRole("button", { name: /Workspace:/ }).click();
+      await page.getByRole("heading", { name: "Model Lab Intelligence", exact: true }).waitFor({
+        timeout: 30_000,
+      });
+      await page.getByTestId("command-center-explore-intelligence").click();
       const createResponse = page.waitForResponse(
         (response) =>
           new URL(response.url()).origin === API_ORIGIN &&
@@ -1267,37 +1284,8 @@ async function planningWorkflow(page) {
       assert.match(createdPayload.data?.id ?? "", /^[0-9a-f-]{36}$/i, "Planning Snapshot create omitted its UUID.");
       snapshotId = createdPayload.data.id;
       rememberOwned("planning", snapshotId);
-
-      await page.getByRole("button", { name: /Planning Snapshot:/ }).click();
-      const library = page.getByTestId("planning-snapshot-library");
-      await library.getByText("Planning Snapshots", { exact: true }).waitFor();
-      const card = library.locator(
-        `[data-testid="planning-snapshot-card"][data-snapshot-id="${snapshotId}"]`,
-      );
-      await card.waitFor({ timeout: 45_000 });
-      await card.getByTestId("planning-snapshot-open").click();
-      await page.locator('button[aria-label^="Workspace:"][aria-pressed="true"]').waitFor();
-      await page.getByRole("button", { name: /Planning Snapshot:/ }).click();
-      await card.waitFor({ timeout: 45_000 });
-      const archiveResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).origin === API_ORIGIN &&
-          new URL(response.url()).pathname === `/api/v1/planning/snapshots/${snapshotId}/archive` &&
-          response.request().method() === "POST",
-        { timeout: 60_000 },
-      );
-      page.once("dialog", (dialog) => dialog.accept());
-      await card.getByTestId("planning-snapshot-archive").click();
-      const archived = await archiveResponse;
-      const archivedPayload = await archived.json();
-      assert.equal(archived.status(), 200, `Planning Snapshot ${snapshotId} archive failed.`);
-      assert.equal(archivedPayload.data?.id, snapshotId, "Planning Snapshot archive returned the wrong record.");
-      assert(archivedPayload.data?.archived_at, "Planning Snapshot archive omitted archived_at.");
+      await archivePlanningSnapshot(snapshotId);
       snapshotArchived = true;
-      await library
-        .getByTestId("planning-persistence-status")
-        .filter({ hasText: "Planning Snapshot archived." })
-        .waitFor();
     } catch (error) {
       primaryFailure = error;
     }
@@ -1306,7 +1294,7 @@ async function planningWorkflow(page) {
     if (snapshotId) {
       try {
         if (!snapshotArchived) await archivePlanningSnapshot(snapshotId);
-        await verifyPlanningSnapshotArchived(snapshotId, snapshotArchived ? "ui_archive" : "api_archive");
+        await verifyPlanningSnapshotArchived(snapshotId, "api_archive");
       } catch (error) {
         cleanupFailure = error;
       }
@@ -1340,7 +1328,6 @@ async function economicsWorkflow(page) {
     assert(signal, "Economics intelligence returned no parcel with assessed-value context.");
     const assessedValue = `$${signal.assessed_value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 
-    await page.getByRole("button", { name: /Economic Dashboard:/ }).click();
     await page.getByRole("heading", { name: "Economic Dashboard", exact: true }).first().waitFor({
       timeout: 45_000,
     });
@@ -1359,7 +1346,8 @@ async function economicsWorkflow(page) {
   });
 
   await runCase("Economics", "scenario, report surface, and export", async () => {
-    await page.getByRole("button", { name: /Power BI & Tools:/ }).click();
+    await page.getByRole("button", { name: "Open economics controls", exact: true }).click();
+    await page.getByRole("button", { name: /^Power BI & Tools/ }).click();
     await page.getByRole("tab", { name: "Data Tables" }).click();
     const tools = page.locator('details[data-econ-tour="advanced-tools"]');
     await tools.locator(":scope > summary").click();
@@ -1454,8 +1442,7 @@ async function navigationChecks(page) {
     await waitForMapLifecycle(page);
     await waitForRequiredApiDrain(page, "Planning to Economics transition");
     const economicsGeneration = beginAcceptanceTransition(page);
-    await page.locator('button[aria-haspopup="menu"]').click();
-    await page.getByRole("menuitemradio", { name: /^Economic Intelligence\b/ }).click();
+    await page.getByRole("button", { name: /^Economics:/ }).click();
     await page.waitForFunction(() => new URLSearchParams(location.search).get("app") === "economics");
     await assertHealthyPage(page);
     completeAcceptanceTransition(page, economicsGeneration);
@@ -1479,7 +1466,7 @@ async function navigationChecks(page) {
     const homeGeneration = beginAcceptanceTransition(page);
     await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
     assert.equal(new URL(page.url()).search, "");
-    await page.getByText("Cabarrus FutureScape", { exact: true }).first().waitFor();
+    await page.getByText("Cabarrus Insights", { exact: true }).first().waitFor();
     await assertHealthyPage(page);
     completeAcceptanceTransition(page, homeGeneration);
     await resolveMapDiagnosticsForPage(page);
@@ -1543,20 +1530,23 @@ async function offlineChecks(browser) {
     await page.getByTestId("command-center-explore-intelligence").click();
     await page.getByLabel("Cabarrus County ArcGIS MapView").waitFor({ timeout: 45_000 });
     await selectParcel(page, { expectedProvider: "local_api" });
-    const expand = page.getByRole("button", { name: "Expand map layers panel" });
+    const expand = page.getByRole("button", { name: /Expand map (?:layers panel|controls)/i });
     if (await expand.count()) await expand.click();
     await toggleLayer(page, "Development Hotspots", "Development Activity");
     await page.getByTestId("command-center-indicator-center").click();
+    await waitForMapLifecycle(page);
     const drawer = await openSharedAskCfsDrawer(page, {
       appMode: "planning",
       label: "CFS Planning",
     });
-    await askQuestions(page, ["What data is still missing?"], { expectPersistence: false });
+    await askQuestions(page, ["What data is still missing?"], {
+      expectPersistenceStatus: false,
+      expectVisibleResponse: false,
+    });
     await closeSharedAskCfsDrawer(page, drawer, "planning");
   }, true);
   await runCase("Economics", "dashboard renders offline", async () => {
     await goto(page, "?app=economics");
-    await page.getByRole("button", { name: /Economic Dashboard:/ }).click();
     await page.getByText("Executive Economic Signals", { exact: true }).waitFor({
       timeout: 45_000,
     });

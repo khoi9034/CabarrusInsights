@@ -108,6 +108,7 @@ const schoolFields: MasterDataFieldDefinition[] = [
 ];
 
 const permitParcelOutputFields: MasterDataFieldDefinition[] = [
+  field("match_status", "Match Status", "Derived from the governed permit-to-parcel relationship count.", "category", ["eq"], "none", true),
   field("parcel_pin14", "Parcel PIN14", "Matched sanitized parcel PIN14.", "text", [], "none"),
   field("parcel_acreage", "Parcel acreage", "Matched demonstration parcel acreage.", "number", [], "none"),
   field("parcel_market_value", "Parcel market value", "Matched rounded demonstration parcel value.", "number", [], "none"),
@@ -430,7 +431,7 @@ function previewDemoRows(
   if (request.sort_field) findQueryField(dataset, request.sort_field, request.join);
 
   const queryRows = joinDemoRows(demoRows[dataset.id], request.join)
-    .filter((row) => request.filters.every((filter) => matchesFilter(dataset, row, filter)));
+    .filter((row) => request.filters.every((filter) => matchesFilter(dataset, row, filter, request.join)));
   queryRows.sort((left, right) => {
     if (!request.sort_field) return 0;
     const direction = request.sort_direction === "desc" ? -1 : 1;
@@ -507,6 +508,7 @@ function joinDemoRows(rows: DemoRow[], join?: MasterDataJoinRequest | null): Dem
       return [{
         ...row,
         geometry: null,
+        match_status: "Unmatched",
         official_parcel_id: null,
         parcel_acreage: null,
         parcel_market_value: null,
@@ -519,6 +521,7 @@ function joinDemoRows(rows: DemoRow[], join?: MasterDataJoinRequest | null): Dem
       return {
         ...row,
         geometry: join.attach_geometry && parcel ? parcel.geometry : null,
+        match_status: matches.length > 1 ? "Multiple Matches" : "Matched",
         official_parcel_id: relationship.official_parcel_id,
         parcel_acreage: parcel?.acreage ?? null,
         parcel_market_value: parcel?.market_value ?? null,
@@ -572,8 +575,9 @@ function matchesFilter(
   dataset: MasterDataDatasetDefinition,
   row: Record<string, unknown>,
   filter: MasterDataFilter,
+  join?: MasterDataJoinRequest | null,
 ) {
-  const definition = findField(dataset, filter.field);
+  const definition = findQueryField(dataset, filter.field, join);
   const actual = row[filter.field];
   if (actual === null || actual === undefined) return false;
   const expected = filter.value.trim();

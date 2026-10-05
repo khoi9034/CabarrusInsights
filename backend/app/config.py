@@ -61,6 +61,24 @@ class Settings(BaseSettings):
         default="inline",
         validation_alias=AliasChoices("CFS_JOB_PROVIDER"),
     )
+    cfs_presentation_cache_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("CFS_PRESENTATION_CACHE_ENABLED"),
+    )
+    cfs_presentation_freeze_id: str = Field(
+        default="unfrozen",
+        validation_alias=AliasChoices("CFS_PRESENTATION_FREEZE_ID"),
+    )
+    cfs_live_refresh_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("CFS_LIVE_REFRESH_ENABLED"),
+    )
+    cfs_live_refresh_timeout_seconds: int = Field(
+        default=900,
+        ge=30,
+        le=3600,
+        validation_alias=AliasChoices("CFS_LIVE_REFRESH_TIMEOUT_SECONDS"),
+    )
     postgres_host: str = Field(
         default="localhost",
         validation_alias=AliasChoices("POSTGRES_HOST"),

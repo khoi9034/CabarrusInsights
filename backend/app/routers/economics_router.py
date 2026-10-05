@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.dependencies.database import get_optional_read_only_db
+from app.presentation_cache import get_or_build
 from app.services.enterprise_export_service import (
     build_powerbi_starter_pack,
     build_powerbi_csv_manifest,
@@ -47,13 +48,20 @@ ECONOMIC_SEGMENTS = [
 ]
 
 
+def clear_economics_cache() -> None:
+    with _ECONOMICS_CACHE_LOCK:
+        for kind in ("fallback", "real"):
+            _ECONOMICS_CACHE[f"{kind}_expires_at"] = None
+            _ECONOMICS_CACHE[f"{kind}_payload"] = None
+
+
 @router.get("/intelligence")
 def get_economics_intelligence(
     db: Session | None = Depends(get_optional_read_only_db, scope="function"),
 ) -> dict[str, Any]:
     """Return parcel economics screening signals for dashboard use."""
 
-    return _cached_economics_intelligence(db)
+    return get_or_build("economics:intelligence", lambda: _cached_economics_intelligence(db))
 
 
 @router.get("/enterprise-export")

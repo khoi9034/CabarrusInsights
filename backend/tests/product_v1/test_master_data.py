@@ -206,6 +206,7 @@ def test_catalog_and_values_expose_only_governed_fields(master_data_harness) -> 
     relationship = datasets["permits"]["relationships"][0]
     assert relationship["id"] == "permits_to_parcels"
     assert {field["id"] for field in relationship["output_fields"]} == {
+        "match_status",
         "parcel_pin14",
         "parcel_acreage",
         "parcel_market_value",
@@ -416,7 +417,7 @@ def test_permit_parcel_join_preserves_relationships_geometry_and_geojson(
             },
         },
     )
-    assert len(all_joined_fields) == 19
+    assert len(all_joined_fields) == 20
     assert select_all.status_code == 200, select_all.text
     assert select_all.json()["data"]["field_ids"] == all_joined_fields
 
@@ -483,6 +484,41 @@ def test_permit_parcel_join_preserves_relationships_geometry_and_geojson(
     assert audit["details"]["lineage"]["export_format"] == "geojson"
     assert audit["details"]["lineage"]["matched_count"] == 4
     assert audit["details"]["lineage"]["unmatched_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("match_status", "expected_permits"),
+    [
+        ("Matched", ["permit-001", "permit-002", "permit-003"]),
+        ("Unmatched", ["permit-005"]),
+        ("Multiple Matches", ["permit-004", "permit-004"]),
+    ],
+)
+def test_permit_parcel_join_filters_and_sorts_by_match_status(
+    master_data_harness,
+    match_status: str,
+    expected_permits: list[str],
+) -> None:
+    response = master_data_harness.client.post(
+        "/api/v1/master-data/datasets/permits/preview",
+        json={
+            **_preview_payload(
+                ["permit_id", "match_status"],
+                [{"field": "match_status", "operator": "eq", "value": match_status}],
+                sort_field="match_status",
+            ),
+            "join": {
+                "relationship_id": "permits_to_parcels",
+                "attach_geometry": False,
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["total"] == len(expected_permits)
+    assert [row["permit_id"] for row in data["rows"]] == expected_permits
+    assert {row["match_status"] for row in data["rows"]} == {match_status}
 
 
 def test_geojson_and_relationship_allowlist_fail_closed(master_data_harness) -> None:

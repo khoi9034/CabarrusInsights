@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.dependencies.database import get_optional_read_only_db
+from app.presentation_cache import get_or_build
 from app.services.wsacc_service import (
     build_wsacc_inventory,
     build_wsacc_statistics,
@@ -27,7 +28,7 @@ def get_wsacc_inventory() -> dict[str, Any]:
 
 @router.get("/statistics")
 def get_wsacc_statistics(db: Session | None = Depends(get_optional_read_only_db, scope="function")) -> dict[str, Any]:
-    return build_wsacc_statistics(db)
+    return get_or_build("wsacc:statistics", lambda: build_wsacc_statistics(db))
 
 
 @router.get("/parcel/{parcel_id}")

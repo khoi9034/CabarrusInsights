@@ -445,6 +445,7 @@ export function MasterDataWorkspace({
 
   const totalPages = preview ? Math.max(1, Math.ceil(preview.total / preview.page_size)) : 1;
   const previewFieldIds = preview?.field_ids ?? selectedFields;
+  const matchStatus = filters.find((filter) => filter.field === "match_status")?.value ?? "";
 
   return (
     <main className="relative z-10 min-h-0 flex-1 overflow-auto px-4 py-5 sm:px-6 lg:px-8" data-testid="master-data-workspace">
@@ -613,6 +614,7 @@ export function MasterDataWorkspace({
                               const joinedIds = new Set(relationship.output_fields.map((field) => field.id));
                               setJoin(null);
                               setSelectedFields((current) => current.filter((fieldId) => !joinedIds.has(fieldId)));
+                              setFilters((current) => current.filter((filter) => !joinedIds.has(filter.field)));
                               if (sortField && joinedIds.has(sortField)) setSortField("");
                             }
                             invalidatePreview();
@@ -629,6 +631,28 @@ export function MasterDataWorkspace({
                           <p><span className="text-slate-600">Primary:</span> {selectedDataset.name}</p>
                           <p><span className="text-slate-600">Enrich with:</span> {target?.name ?? relationship.target_dataset_id}</p>
                           <p><span className="text-slate-600">Cardinality:</span> {relationship.cardinality}</p>
+                          <label className="block rounded-lg border border-white/10 bg-white/[0.025] p-3">
+                            <span className="mb-2 block font-semibold text-slate-300">Match Status</span>
+                            <select
+                              aria-label="Match Status"
+                              className={controlClass}
+                              data-testid="master-data-match-status"
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                setFilters((current) => [
+                                  ...current.filter((filter) => filter.field !== "match_status"),
+                                  ...(value ? [{ field: "match_status", operator: "eq" as const, value }] : []),
+                                ]);
+                                invalidatePreview();
+                              }}
+                              value={matchStatus}
+                            >
+                              <option value="">All</option>
+                              <option value="Matched">Matched</option>
+                              <option value="Unmatched">Unmatched</option>
+                              <option value="Multiple Matches">Multiple Matches</option>
+                            </select>
+                          </label>
                           {relationship.supports_geometry ? (
                             <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[#d8b86a]/18 bg-[#d8b86a]/6 p-3 text-amber-50/85">
                               <input
