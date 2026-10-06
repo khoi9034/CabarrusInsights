@@ -2,7 +2,7 @@
 
 ## Starting point
 
-- Branch at handoff: `product/cfs-ask-docked-panel-v1`
+- Branch at handoff: `release/cfs-v1-internal`
 - Supported local stack: `npm.cmd run present:cfs`
 - Readiness: `npm.cmd run check:internal-readiness`
 - Stop/restart: `npm.cmd run stop:cfs` / `npm.cmd run restart:cfs`
